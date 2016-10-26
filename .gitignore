@@ -1,0 +1,11 @@
+.metadata/
+.recommenders/
+.settings/
+bin/
+target/
+output/
+data/
+*.dat
+*.log
+*.orig
+*.txt
