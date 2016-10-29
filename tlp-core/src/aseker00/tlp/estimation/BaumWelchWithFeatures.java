@@ -64,8 +64,8 @@ public class BaumWelchWithFeatures extends BaumWelch {
 		super.dataSetIs(data);
 	}
 	
-	public void logLikelihoodPreStep(LabeledSequence sequence, HiddenMarkovModel hmm, Set<Element> tokens) {
+	public void logLikelihoodPreStep(LabeledSequence sequence, HiddenMarkovModel hmm, Set<Element> eDecisions) {
 		for (int i = 0; i < sequence.length(); i++)
-			tokens.add(sequence.entry(i));
+			eDecisions.add(sequence.entry(i));
 	}
 }

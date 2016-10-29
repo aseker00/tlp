@@ -181,7 +181,7 @@ public class HiddenMarkovModel extends LinearChainSequenceLabelModelImpl {
 		return bw.logLikelihoodStep(sequence, this);
 	}
 	
-	public void logLikelihoodPreStep(LabeledSequence sequence, BaumWelchWithFeatures bw2, Set<Element> tokens) {
-		bw2.logLikelihoodPreStep(sequence, this, tokens);
+	public void logLikelihoodPreStep(LabeledSequence sequence, BaumWelchWithFeatures bw2, Set<Element> eDecisions) {
+		bw2.logLikelihoodPreStep(sequence, this, eDecisions);
 	}
 }

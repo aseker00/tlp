@@ -2,6 +2,7 @@ package aseker00.tlp.mt.impl.estimation;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
@@ -68,19 +69,19 @@ public class BaumWelchWithFeaturesMT extends BaumWelchWithFeatures {
 	}
 
 	class PreFunctionThread extends Thread {
-		HashSet<Element> decisions;
+		HashSet<Element> eDecisions;
 		BlockingQueue<LabeledSequence> sequences;
 		HiddenMarkovModel hmm;
 
 		PreFunctionThread(String name, HiddenMarkovModel hmm) {
 			super(name);
 			this.hmm = hmm;
-			this.decisions = new HashSet<Element>();
+			this.eDecisions = new HashSet<Element>();
 			this.sequences = new LinkedBlockingQueue<LabeledSequence>();
 		}
 
-		 HashSet<Element> decisions() {
-			return this.decisions;
+		Set<Element> eDecisions() {
+			return this.eDecisions;
 		}
 
 		@Override
@@ -90,7 +91,7 @@ public class BaumWelchWithFeaturesMT extends BaumWelchWithFeatures {
 					LabeledSequence sequence = this.sequences.take();
 					if (sequence instanceof NullSequence)
 						break;
-					this.hmm.logLikelihoodPreStep(sequence, BaumWelchWithFeaturesMT.this, decisions);
+					this.hmm.logLikelihoodPreStep(sequence, BaumWelchWithFeaturesMT.this, eDecisions);
 					BaumWelchWithFeaturesMT.this.onPreFunctionThread(this);
 				} catch (InterruptedException e) {
 					// TODO Auto-generated catch block
@@ -141,6 +142,7 @@ public class BaumWelchWithFeaturesMT extends BaumWelchWithFeatures {
 			thread.start();
 			this.preQueue.add(thread);
 		}
+		HashSet<Element> eDecisions = new HashSet<Element>();
 		CorpusReader stream = data.readerNew(data.name() + "::" + this.name());
 		this.logLikelihood = this.model().logLikelihoodNew();
 		Tweet tweet;
@@ -157,14 +159,13 @@ public class BaumWelchWithFeaturesMT extends BaumWelchWithFeatures {
 				e.printStackTrace();
 			}
 		}
-		HashSet<Element> eDecisions = new HashSet<Element>();
 		NullSequence nullSequence = new NullSequence();
 		for (int i = 0; i < this.threads; i++) {
 			try {
 				PreFunctionThread thread = this.preQueue.take();
 				thread.sequences.offer(nullSequence);
 				thread.join();
-				eDecisions.addAll(thread.decisions());
+				eDecisions.addAll(thread.eDecisions());
 			} catch (InterruptedException e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
@@ -172,8 +173,6 @@ public class BaumWelchWithFeaturesMT extends BaumWelchWithFeatures {
 		}
 		MaximumEntropyMarkovModel eMemm = (MaximumEntropyMarkovModel)this.model().emissionProbabilityDistribution();
 		MaximumEntropyMarkovModel tMemm = (MaximumEntropyMarkovModel)this.model().transitionProbabilityDistribution();
-		//for (Element c: eMemm.conditions())
-		//	eMemm.events(c).addAll(eDecisions);
 		for (Element c: eMemm.conditions()) {
 			for (Element d: eDecisions) {
 				Ngram emission = eMemm.emission((Ngram)c, d);

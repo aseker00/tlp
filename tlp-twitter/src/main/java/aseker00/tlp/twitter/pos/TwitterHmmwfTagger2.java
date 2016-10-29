@@ -5,10 +5,10 @@ import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 
 import org.apache.commons.cli.CommandLine;
 
@@ -50,9 +50,9 @@ import aseker00.tlp.proc.Estimator;
 import aseker00.tlp.proc.Processor;
 import aseker00.tlp.twitter.kafka.KafkaCorpus;
 
-public class TwitterHmmwfTagger extends ArkHmmwfTagger {
+public class TwitterHmmwfTagger2 extends ArkHmmwfTagger {
 
-	public TwitterHmmwfTagger(String name) {
+	public TwitterHmmwfTagger2(String name) {
 		super(name);
 		// TODO Auto-generated constructor stub
 	}
@@ -70,11 +70,11 @@ public class TwitterHmmwfTagger extends ArkHmmwfTagger {
 		if (cmd.hasOption("size")) {
 			size = Integer.parseInt(cmd.getOptionValue("size"));
 		} else {
-			size = 100;
+			size = 1000;
 		}
 		int threads = cmd.hasOption("threads") ? Integer.parseInt(cmd.getOptionValue("threads")) : 4;
-		int stepSize = cmd.hasOption("step") ? Integer.parseInt(cmd.getOptionValue("step")) : 1;
-		TwitterHmmwfTagger tagger = new TwitterHmmwfTagger("ark");
+		int stepSize = cmd.hasOption("step") ? Integer.parseInt(cmd.getOptionValue("step")) : 10;
+		TwitterHmmwfTagger2 tagger = new TwitterHmmwfTagger2("ark");
 		tagger.specialPatternTokenIs(ArkSpecialPatternTokens.AT_MENTION, new Token("___MENTION___"));
 		tagger.specialPatternTokenIs(ArkSpecialPatternTokens.HASHTAG, new Token("___HASHTAG___"));
 		tagger.specialPatternTokenIs(ArkSpecialPatternTokens.URL, new Token("___URL___"));
@@ -103,7 +103,7 @@ public class TwitterHmmwfTagger extends ArkHmmwfTagger {
 		tagger.specialTagSetIs(new TagSet("special", specialTags));
 		ArkCorpus arkTestCorpus = new ArkCorpus("oct27.test", new File(base, "data/oct27.test"), tagger);
 		ArkCorpus arkTrainCorpus = new ArkCorpus("oct27.traindev", new File(base, "data/oct27.traindev"), tagger);
-		KafkaCorpus kafkaTrainCorpus = new KafkaCorpus("stream0", size, "twitter", size * 0, tagger);
+		KafkaCorpus kafkaTrainCorpus = new KafkaCorpus("stream00", size, "twitter", size * 0, tagger);
 		FeatureFunction ff = new FeatureFunction();
 		MaximumEntropyMarkovModel memm = new MaximumEntropyMarkovModel("memm", tagger, chain, chain, ff);
 		FeatureTemplate eTemplate = new EmissionFeatureTemplate(memm);
@@ -111,34 +111,40 @@ public class TwitterHmmwfTagger extends ArkHmmwfTagger {
 		memm.featureFunctionTemplateIs(eTemplate, eTemplate);
 		memm.featureFunctionTemplateIs(tTemplate, tTemplate);
 		ModelLoader.loadModel(memm, new File("../tlp-ark/output/" + tagger.name() + "_model.txt"));
-		HashMap<Element, Set<Element>> tContextDecisions = new HashMap<Element, Set<Element>>();
-		HashMap<Element, Set<Element>> eContextDecisions = new HashMap<Element, Set<Element>>();
+
+		HashSet<Ngram> eContext = new HashSet<Ngram>();
+		HashSet<Ngram> tContext = new HashSet<Ngram>();
+		HashSet<Element> eDecisions = new HashSet<Element>();
+		HashSet<Element> tDecisions = new HashSet<Element>();
+		for (Tag tag: tagger.tagSet())
+			tDecisions.add(tag);
+		tDecisions.add(tagger.stopTag());
 		CorpusReader stream = arkTrainCorpus.readerNew(arkTrainCorpus.name() + "::" + tagger.name());
 		Tweet tweet;
 		while ((tweet = stream.next()) != null) {
 			ArrayList<Element> entries = new ArrayList<Element>();
-			ArrayList<Element> labels = new ArrayList<Element>();
-			for (int i = 0; i < tweet.tokens(); i++) {
+			for (int i = 0; i < tweet.tokens(); i++)
 				entries.add(tweet.token(i));
-				labels.add(tweet.tag(i));
-			}
-			LabeledSequence sequence = new LabeledSequenceImpl(entries, labels);
+			LabeledSequence sequence = new LabeledSequenceImpl(entries);
 			for (int i = 0; i < sequence.length(); i++) {
-				memm.featureVector(sequence, i);
-				Ngram transition = memm.transition(sequence, i);
-				Ngram emission = memm.emission(sequence, i);
-				Ngram tCondition = transition.subgram(0, transition.size()-1);
-				Ngram eCondition = emission.subgram(0, emission.size()-1);
-				tContextDecisions.putIfAbsent(tCondition, new HashSet<Element>());
-				eContextDecisions.putIfAbsent(eCondition, new HashSet<Element>());
-				tContextDecisions.get(tCondition).add(sequence.label(i));
-				eContextDecisions.get(eCondition).add(sequence.entry(i));
+				Set<Ngram> transitions = memm.transitions(sequence, i);
+				for (Ngram transition : transitions) {
+					sequence.labelTransitionIs(i, transition);
+					Ngram emission = memm.emission(sequence, i);
+					Ngram tCondition = transition.subgram(0, transition.size()-1);
+					Ngram eCondition = emission.subgram(0, emission.size()-1);
+					tContext.add(tCondition);
+					eContext.add(eCondition);
+					tDecisions.add(sequence.label(i));
+					eDecisions.add(sequence.entry(i));
+				}
 			}
-			memm.featureVector(sequence, sequence.length());
-			Ngram transition = memm.transition(sequence, sequence.length());
-			Ngram tCondition = transition.subgram(0, transition.size()-1);
-			tContextDecisions.putIfAbsent(tCondition, new HashSet<Element>());
-			tContextDecisions.get(tCondition).add(tagger.stopTag());
+			Set<Ngram> transitions = memm.transitions(sequence, sequence.length());
+			for (Ngram transition : transitions) {
+				sequence.labelTransitionIs(sequence.length(), transition);
+				Ngram tCondition = transition.subgram(0, transition.size()-1);
+				tContext.add(tCondition);
+			}
 		}
 		stream = kafkaTrainCorpus.readerNew(kafkaTrainCorpus.name() + "::" + tagger.name());
 		while ((tweet = stream.next()) != null) {
@@ -154,8 +160,14 @@ public class TwitterHmmwfTagger extends ArkHmmwfTagger {
 					for (Feature feature: fv.features()) {
 						if (memm.parameters().entryValue(feature.index()) != 0.0)
 							continue;
-						double value = 1.0 - Math.random();
 						Feature weight = new Feature(ff, feature.index());
+						double value = 0.0;
+						if (tagger.openClassTagSet().contains((Tag)sequence.label(i)))
+							value = ThreadLocalRandom.current().nextDouble(0.01, 0.1);
+						else if (tagger.closedClassTagSet().contains((Tag)sequence.label(i)))
+							value = ThreadLocalRandom.current().nextDouble(0.001, 0.01);
+						else if (tagger.specialTagSet().contains((Tag)sequence.label(i)))
+							value = ThreadLocalRandom.current().nextDouble(0.001, 0.01);
 						weight.valueIs(value);
 						memm.parameters().entryIs(weight.index(), weight);
 					}
@@ -200,37 +212,23 @@ public class TwitterHmmwfTagger extends ArkHmmwfTagger {
 				return value;
 			}
 		};
-		FeatureVector eWeights = memm.featureVectorNew();
-		FeatureVector tWeights = memm.featureVectorNew();
 		for (Feature weight: memm.parameters().features()) {
 			if (memm.function().feature(eTemplate, weight.index()) != null)
-				eWeights.entryIs(weight.index(), weight);
+				eMemm.parameters().entryIs(weight.index(), weight);
 			else if (memm.function().feature(tTemplate, weight.index()) != null)
-				tWeights.entryIs(weight.index(), weight);
+				tMemm.parameters().entryIs(weight.index(), weight);
 		}
-		eMemm.weightsVectorIs(eWeights);
-		tMemm.weightsVectorIs(tWeights);
-		HashSet<Ngram> tContext = new HashSet<Ngram>();
-		HashSet<Ngram> eContext = new HashSet<Ngram>();
-		for (Ngram transition: memm.transitions()) {
-			Ngram tCondition = transition.subgram(0, transition.size()-1);
-			Ngram eCondition = transition.subgram(transition.size()-1);
-			tContext.add(tCondition);
-			eContext.add(eCondition);
+		for (Ngram c: tContext) {
+			tMemm.eventSetIs(c, new HashSet<Element>());
+			for (Element d: tDecisions) {
+				Ngram transition = tMemm.transition(c, d);
+				tMemm.events(c).add(transition.entry(transition.size()-1));
+			}
 		}
-		HashSet<Element> tDecisions = new HashSet<Element>();
-		for (Tag tag: tagger.tagSet())
-			tDecisions.add(tag);
-		tDecisions.add(tagger.stopTag());
-		HashSet<Element> eDecisions = new HashSet<Element>();
-		for (Element c: eContextDecisions.keySet()) 
-			eDecisions.addAll(eContextDecisions.get(c));
-		for (Element c: tContextDecisions.keySet())
-			tMemm.eventSetIs(c, tDecisions);
-		for (Element c: eContextDecisions.keySet()) {
+		for (Ngram c: eContext) {
 			eMemm.eventSetIs(c, new HashSet<Element>());
 			for (Element d: eDecisions) {
-				Ngram emission = eMemm.emission((Ngram)c, d);
+				Ngram emission = eMemm.emission(c, d);
 				eMemm.events(c).add(emission.entry(emission.size()-1));
 			}
 		}
@@ -266,6 +264,12 @@ public class TwitterHmmwfTagger extends ArkHmmwfTagger {
 				SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 				System.out.println("[" + sdf.format(cal.getTime()) + "][" + "lbfgsNotifiee" + "]\tround " + this.round + ": onDataSet");
 				memm.weightsVectorIs(lbfgs2.featureVector());
+				try {
+					ModelPrinter.printModel(memm, new File("output/" + tagger.name() + "_" + memm.name() + "_" + this.round + ".txt"));
+				} catch (IOException e1) {
+					// TODO Auto-generated catch block
+					e1.printStackTrace();
+				}
 				FeatureVector eWeights = memm.featureVectorNew();
 				FeatureVector tWeights = memm.featureVectorNew();
 				for (Feature weight: memm.parameters().features()) {
@@ -276,13 +280,6 @@ public class TwitterHmmwfTagger extends ArkHmmwfTagger {
 				}
 				eMemm.weightsVectorIs(eWeights);
 				tMemm.weightsVectorIs(tWeights);
-				try {
-					ModelPrinter.printModel(eMemm, new File("output/" + tagger.name() + "_" + eMemm.name() + "_" + this.round + ".txt"));
-					ModelPrinter.printModel(tMemm, new File("output/" + tagger.name() + "_" + tMemm.name() + "_" + this.round + ".txt"));
-				} catch (IOException e1) {
-					// TODO Auto-generated catch block
-					e1.printStackTrace();
-				}
 				acc.dataSetIs(arkTestCorpus);
 				if (this.round % stepSize == 0) {
 					List<Feature> features = memm.function().features();
@@ -306,9 +303,15 @@ public class TwitterHmmwfTagger extends ArkHmmwfTagger {
 								for (Feature feature: fv.features()) {
 									if (memm.parameters().entryValue(feature.index()) != 0.0)
 										continue;
-									double value = 1.0 - Math.random();
 									Feature weight = new Feature(ff, feature.index());
-									weight.valueIs(value);
+									double value = 0.0;
+									if (tagger.openClassTagSet().contains((Tag)sequence.label(i)))
+										value = ThreadLocalRandom.current().nextDouble(0.01, 0.1);
+									else if (tagger.closedClassTagSet().contains((Tag)sequence.label(i)))
+										value = ThreadLocalRandom.current().nextDouble(0.001, 0.01);
+									else if (tagger.specialTagSet().contains((Tag)sequence.label(i)))
+										value = ThreadLocalRandom.current().nextDouble(0.001, 0.01);
+									weight.valueIs((value));
 									memm.parameters().entryIs(weight.index(), weight);
 								}
 							}
